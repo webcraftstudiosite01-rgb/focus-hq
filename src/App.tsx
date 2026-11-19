@@ -18,6 +18,7 @@ import { TemplateModal } from './components/modals/TemplateModal';
 import { HabitModal } from './components/modals/HabitModal';
 import { BackupModal } from './components/modals/BackupModal';
 import { SettingsModal } from './components/modals/SettingsModal';
+import { SyncModal } from './components/modals/SyncModal';
 
 import { Task, Goal, Lead, MessageTemplate, Habit } from './types';
 
@@ -44,6 +45,7 @@ export const AppContent: React.FC = () => {
 
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
 
   // Global Keyboard Shortcuts (N = new task, / = search, Escape = close modals)
   useEffect(() => {
@@ -63,6 +65,7 @@ export const AppContent: React.FC = () => {
         setIsHabitModalOpen(false);
         setIsBackupModalOpen(false);
         setIsSettingsModalOpen(false);
+        setIsSyncModalOpen(false);
         return;
       }
 
@@ -126,6 +129,7 @@ export const AppContent: React.FC = () => {
           onOpenTaskModal={() => openNewTaskModal()}
           onOpenBackupModal={() => setIsBackupModalOpen(true)}
           onOpenSettingsModal={() => setIsSettingsModalOpen(true)}
+          onOpenSyncModal={() => setIsSyncModalOpen(true)}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           searchInputRef={searchInputRef}
@@ -229,6 +233,11 @@ export const AppContent: React.FC = () => {
       <SettingsModal
         isOpen={isSettingsModalOpen}
         onClose={() => setIsSettingsModalOpen(false)}
+      />
+
+      <SyncModal
+        isOpen={isSyncModalOpen}
+        onClose={() => setIsSyncModalOpen(false)}
       />
 
     </div>

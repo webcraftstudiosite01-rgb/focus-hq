@@ -9,6 +9,7 @@ import {
   DEMO_TEMPLATES, DEMO_HABITS, DEMO_REVIEWS, DEMO_POMODORO_SESSIONS, DEMO_OUTREACH_LOGS
 } from './demoData';
 import { getTodayString, calculateStreak } from '../utils/dateUtils';
+import { syncService, SyncConfig } from '../utils/syncService';
 import confetti from 'canvas-confetti';
 
 interface AppContextType {
@@ -70,6 +71,14 @@ interface AppContextType {
   updateSettings: (updates: Partial<AppSettings>) => void;
   toggleTheme: () => void;
 
+  // Cloud Synchronization
+  syncConfig: SyncConfig;
+  syncStatus: 'idle' | 'syncing' | 'success' | 'error';
+  lastSyncTime: string | undefined;
+  syncNow: (direction?: 'push' | 'pull') => Promise<{ success: boolean; error?: string }>;
+  updateSyncConfig: (updates: Partial<SyncConfig>) => void;
+  getMobilePairingUrl: () => string;
+
   // Backup & Reset
   exportDataJSON: () => string;
   importDataJSON: (jsonString: string) => { success: boolean; error?: string };
@@ -102,6 +111,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [pomodoroSessions, setPomodoroSessions] = useState<PomodoroSession[]>(() => storage.get('pomodoroSessions', DEMO_POMODORO_SESSIONS));
   const [outreachLogs, setOutreachLogs] = useState<Record<string, number>>(() => storage.get('outreachLogs', DEMO_OUTREACH_LOGS));
   const [settings, setSettings] = useState<AppSettings>(() => storage.get('settings', INITIAL_SETTINGS));
+
+  // Cloud Sync State
+  const [syncConfig, setSyncConfig] = useState<SyncConfig>(() => syncService.getConfig());
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
+  const [lastSyncTime, setLastSyncTime] = useState<string | undefined>(() => syncService.getConfig().lastSyncTime);
 
   useEffect(() => {
     setIsInitialized(true);
@@ -450,6 +464,151 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return JSON.stringify(backup, null, 2);
   };
 
+  const getBackupDataObject = (): AppDataBackup => ({
+    version: '1.0.0',
+    exportedAt: new Date().toISOString(),
+    tasks,
+    goals,
+    leads,
+    templates,
+    habits,
+    reviews,
+    pomodoroSessions,
+    outreachLogs,
+    settings,
+  });
+
+  // --- Cloud Sync Implementation ---
+  const updateSyncConfig = (updates: Partial<SyncConfig>) => {
+    setSyncConfig((prev) => {
+      const next = { ...prev, ...updates };
+      syncService.saveConfig(next);
+      return next;
+    });
+  };
+
+  const getMobilePairingUrl = (): string => {
+    return syncService.getMobilePairingUrl(syncConfig);
+  };
+
+  const syncNow = async (direction?: 'push' | 'pull'): Promise<{ success: boolean; error?: string }> => {
+    setSyncStatus('syncing');
+
+    if (direction === 'push') {
+      const currentData = getBackupDataObject();
+      const res = await syncService.pushToCloud(currentData);
+      if (res.success) {
+        setSyncStatus('success');
+        setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+      } else {
+        setSyncStatus('error');
+      }
+      return res;
+    }
+
+    if (direction === 'pull') {
+      const res = await syncService.pullFromCloud();
+      if (res.success && res.data) {
+        applyImportedData(res.data);
+        setSyncStatus('success');
+        setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+        return { success: true };
+      } else {
+        setSyncStatus('error');
+        return { success: false, error: res.error };
+      }
+    }
+
+    // Default: try pull first, if empty or error, push
+    const pullRes = await syncService.pullFromCloud();
+    if (pullRes.success && pullRes.data && Array.isArray(pullRes.data.tasks) && pullRes.data.tasks.length > 0) {
+      applyImportedData(pullRes.data);
+      setSyncStatus('success');
+      setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+      return { success: true };
+    } else {
+      const pushRes = await syncService.pushToCloud(getBackupDataObject());
+      if (pushRes.success) {
+        setSyncStatus('success');
+        setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+      } else {
+        setSyncStatus('error');
+      }
+      return pushRes;
+    }
+  };
+
+  const applyImportedData = (data: Partial<AppDataBackup>) => {
+    if (Array.isArray(data.tasks)) setTasks(data.tasks);
+    if (Array.isArray(data.goals)) setGoals(data.goals);
+    if (Array.isArray(data.leads)) setLeads(data.leads);
+    if (Array.isArray(data.templates)) setTemplates(data.templates);
+    if (Array.isArray(data.habits)) setHabits(data.habits);
+    if (Array.isArray(data.reviews)) setReviews(data.reviews);
+    if (Array.isArray(data.pomodoroSessions)) setPomodoroSessions(data.pomodoroSessions);
+    if (data.outreachLogs && typeof data.outreachLogs === 'object') setOutreachLogs(data.outreachLogs);
+    if (data.settings && typeof data.settings === 'object') setSettings({ ...INITIAL_SETTINGS, ...data.settings });
+  };
+
+  // Initial cloud sync and window focus listener
+  useEffect(() => {
+    if (!isInitialized) return;
+
+    if (syncConfig.autoSync && syncConfig.token && syncConfig.gistId) {
+      // Pull on initial load
+      syncService.pullFromCloud().then((res) => {
+        if (res.success && res.data && Array.isArray(res.data.tasks) && res.data.tasks.length > 0) {
+          applyImportedData(res.data);
+          setSyncStatus('success');
+          setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+        } else {
+          // If gist was empty, push initial state
+          syncService.pushToCloud(getBackupDataObject()).then((pushRes) => {
+            if (pushRes.success) {
+              setSyncStatus('success');
+              setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+            }
+          });
+        }
+      });
+    }
+
+    // Auto-pull on window focus (so when returning from mobile to laptop, updates are instant)
+    const handleFocus = () => {
+      if (syncConfig.autoSync && syncConfig.token && syncConfig.gistId) {
+        syncService.pullFromCloud().then((res) => {
+          if (res.success && res.data) {
+            applyImportedData(res.data);
+            setSyncStatus('success');
+            setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+          }
+        });
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [isInitialized]);
+
+  // Debounced auto-save to cloud
+  useEffect(() => {
+    if (!isInitialized || !syncConfig.autoSync || !syncConfig.token || !syncConfig.gistId) return;
+
+    const timer = setTimeout(() => {
+      setSyncStatus('syncing');
+      syncService.pushToCloud(getBackupDataObject()).then((res) => {
+        if (res.success) {
+          setSyncStatus('success');
+          setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+        } else {
+          setSyncStatus('error');
+        }
+      });
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [tasks, goals, leads, templates, habits, reviews, pomodoroSessions, outreachLogs, settings]);
+
   const importDataJSON = (jsonString: string): { success: boolean; error?: string } => {
     try {
       const parsed = JSON.parse(jsonString) as Partial<AppDataBackup>;
@@ -590,6 +749,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     importDataJSON,
     resetToDemoData,
     clearAllData,
+    syncConfig,
+    syncStatus,
+    lastSyncTime,
+    syncNow,
+    updateSyncConfig,
+    getMobilePairingUrl,
     todayTasks,
     todayCompletedCount,
     todayCompletionPercentage,

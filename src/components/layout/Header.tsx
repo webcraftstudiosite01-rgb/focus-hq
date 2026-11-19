@@ -1,13 +1,14 @@
 import React from 'react';
 import { useApp } from '../../store/AppContext';
 import {
-  Flame, Sun, Moon, Plus, Download, Sliders, Search, Sparkles
+  Flame, Sun, Moon, Plus, Download, Sliders, Search, Cloud, RefreshCw
 } from 'lucide-react';
 
 interface HeaderProps {
   onOpenTaskModal: () => void;
   onOpenBackupModal: () => void;
   onOpenSettingsModal: () => void;
+  onOpenSyncModal: () => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
@@ -17,11 +18,12 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenTaskModal,
   onOpenBackupModal,
   onOpenSettingsModal,
+  onOpenSyncModal,
   searchQuery,
   onSearchChange,
   searchInputRef,
 }) => {
-  const { currentStreak, settings, toggleTheme } = useApp();
+  const { currentStreak, settings, toggleTheme, syncStatus, lastSyncTime } = useApp();
 
   return (
     <header className="sticky top-0 z-30 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800/80 px-4 lg:px-8 py-3 transition-colors">
@@ -60,6 +62,23 @@ export const Header: React.FC<HeaderProps> = ({
             <Flame className={`w-4 h-4 ${currentStreak > 0 ? 'text-amber-500 fill-amber-500 animate-pulse' : 'text-slate-400'}`} />
             <span>{currentStreak} дн.</span>
           </div>
+
+          {/* Cloud Sync Button */}
+          <button
+            onClick={onOpenSyncModal}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-all cursor-pointer"
+            title={`Облачная синхронизация (${syncStatus === 'syncing' ? 'Синхронизируется...' : lastSyncTime ? `Обновлено в ${lastSyncTime}` : 'Подключено к телефону'})`}
+          >
+            <div className="relative flex items-center">
+              <Cloud className="w-4 h-4 text-indigo-500" />
+              <span className={`absolute -top-1 -right-1 w-2 h-2 rounded-full ring-2 ring-white dark:ring-slate-900 ${
+                syncStatus === 'syncing' ? 'bg-amber-400 animate-ping' : syncStatus === 'error' ? 'bg-rose-500' : 'bg-emerald-500'
+              }`} />
+            </div>
+            <span className="hidden sm:inline text-[11px]">
+              {syncStatus === 'syncing' ? 'Синхронизация...' : 'Облако'}
+            </span>
+          </button>
 
           {/* Quick Add Task Button */}
           <button
