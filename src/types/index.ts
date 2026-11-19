@@ -117,6 +117,7 @@ export interface AppSettings {
 export interface AppDataBackup {
   version: string;
   exportedAt: string;
+  updatedAtTimestamp?: number;
   tasks: Task[];
   goals: Goal[];
   leads: Lead[];

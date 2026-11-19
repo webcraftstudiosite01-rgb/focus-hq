@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef, ReactNode } from 'react';
 import {
   Task, Goal, Lead, MessageTemplate, Habit, DailyReview,
   PomodoroSession, AppSettings, AppDataBackup, TaskStatus
@@ -116,6 +116,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [syncConfig, setSyncConfig] = useState<SyncConfig>(() => syncService.getConfig());
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [lastSyncTime, setLastSyncTime] = useState<string | undefined>(() => syncService.getConfig().lastSyncTime);
+
+  // Guards against overwrite races
+  const isInitialPullCompleteRef = useRef(false);
+  const isApplyingRemoteRef = useRef(false);
+  const lastKnownCloudTimestampRef = useRef<number>(0);
 
   useEffect(() => {
     setIsInitialized(true);
@@ -498,8 +503,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const currentData = getBackupDataObject();
       const res = await syncService.pushToCloud(currentData);
       if (res.success) {
+        if (res.timestamp) {
+          lastKnownCloudTimestampRef.current = res.timestamp;
+        }
         setSyncStatus('success');
-        setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+        setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       } else {
         setSyncStatus('error');
       }
@@ -510,8 +518,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const res = await syncService.pullFromCloud();
       if (res.success && res.data) {
         applyImportedData(res.data);
+        if (res.data.updatedAtTimestamp) {
+          lastKnownCloudTimestampRef.current = res.data.updatedAtTimestamp;
+        }
         setSyncStatus('success');
-        setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+        setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
         return { success: true };
       } else {
         setSyncStatus('error');
@@ -519,18 +530,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     }
 
-    // Default: try pull first, if empty or error, push
+    // Default: try pull first
     const pullRes = await syncService.pullFromCloud();
-    if (pullRes.success && pullRes.data && Array.isArray(pullRes.data.tasks) && pullRes.data.tasks.length > 0) {
+    if (pullRes.success && pullRes.data) {
       applyImportedData(pullRes.data);
+      if (pullRes.data.updatedAtTimestamp) {
+        lastKnownCloudTimestampRef.current = pullRes.data.updatedAtTimestamp;
+      }
       setSyncStatus('success');
-      setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+      setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       return { success: true };
     } else {
       const pushRes = await syncService.pushToCloud(getBackupDataObject());
       if (pushRes.success) {
+        if (pushRes.timestamp) {
+          lastKnownCloudTimestampRef.current = pushRes.timestamp;
+        }
         setSyncStatus('success');
-        setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+        setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       } else {
         setSyncStatus('error');
       }
@@ -539,72 +556,144 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const applyImportedData = (data: Partial<AppDataBackup>) => {
-    if (Array.isArray(data.tasks)) setTasks(data.tasks);
-    if (Array.isArray(data.goals)) setGoals(data.goals);
-    if (Array.isArray(data.leads)) setLeads(data.leads);
-    if (Array.isArray(data.templates)) setTemplates(data.templates);
-    if (Array.isArray(data.habits)) setHabits(data.habits);
-    if (Array.isArray(data.reviews)) setReviews(data.reviews);
-    if (Array.isArray(data.pomodoroSessions)) setPomodoroSessions(data.pomodoroSessions);
-    if (data.outreachLogs && typeof data.outreachLogs === 'object') setOutreachLogs(data.outreachLogs);
-    if (data.settings && typeof data.settings === 'object') setSettings({ ...INITIAL_SETTINGS, ...data.settings });
+    isApplyingRemoteRef.current = true;
+    if (data.updatedAtTimestamp) {
+      lastKnownCloudTimestampRef.current = data.updatedAtTimestamp;
+    }
+
+    if (Array.isArray(data.tasks)) {
+      setTasks(data.tasks);
+      storage.set('tasks', data.tasks);
+    }
+    if (Array.isArray(data.goals)) {
+      setGoals(data.goals);
+      storage.set('goals', data.goals);
+    }
+    if (Array.isArray(data.leads)) {
+      setLeads(data.leads);
+      storage.set('leads', data.leads);
+    }
+    if (Array.isArray(data.templates)) {
+      setTemplates(data.templates);
+      storage.set('templates', data.templates);
+    }
+    if (Array.isArray(data.habits)) {
+      setHabits(data.habits);
+      storage.set('habits', data.habits);
+    }
+    if (Array.isArray(data.reviews)) {
+      setReviews(data.reviews);
+      storage.set('reviews', data.reviews);
+    }
+    if (Array.isArray(data.pomodoroSessions)) {
+      setPomodoroSessions(data.pomodoroSessions);
+      storage.set('pomodoroSessions', data.pomodoroSessions);
+    }
+    if (data.outreachLogs && typeof data.outreachLogs === 'object') {
+      setOutreachLogs(data.outreachLogs);
+      storage.set('outreachLogs', data.outreachLogs);
+    }
+    if (data.settings && typeof data.settings === 'object') {
+      const mergedSettings = { ...INITIAL_SETTINGS, ...data.settings };
+      setSettings(mergedSettings);
+      storage.set('settings', mergedSettings);
+    }
+
+    setTimeout(() => {
+      isApplyingRemoteRef.current = false;
+    }, 1200);
   };
 
-  // Initial cloud sync and window focus listener
+  // Initial cloud sync, focus listener, and periodic polling (every 10s)
   useEffect(() => {
     if (!isInitialized) return;
 
-    if (syncConfig.autoSync && syncConfig.token && syncConfig.gistId) {
-      // Pull on initial load
-      syncService.pullFromCloud().then((res) => {
-        if (res.success && res.data && Array.isArray(res.data.tasks) && res.data.tasks.length > 0) {
+    const pullRemote = async (isInitial = false) => {
+      const cfg = syncService.getConfig();
+      if (!cfg.autoSync || !cfg.token || !cfg.gistId) {
+        if (isInitial) isInitialPullCompleteRef.current = true;
+        return;
+      }
+
+      const res = await syncService.pullFromCloud();
+      if (res.success && res.data) {
+        const remoteTs = res.data.updatedAtTimestamp || (res.data.exportedAt ? new Date(res.data.exportedAt).getTime() : 0);
+        
+        // On initial load or when remote is newer, apply remote data
+        if (isInitial || remoteTs > lastKnownCloudTimestampRef.current) {
           applyImportedData(res.data);
-          setSyncStatus('success');
-          setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
-        } else {
-          // If gist was empty, push initial state
+          lastKnownCloudTimestampRef.current = remoteTs;
+          setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }
+        setSyncStatus('success');
+      } else {
+        if (isInitial) {
+          // If remote pull had no data, push local data once
           syncService.pushToCloud(getBackupDataObject()).then((pushRes) => {
-            if (pushRes.success) {
+            if (pushRes.success && pushRes.timestamp) {
+              lastKnownCloudTimestampRef.current = pushRes.timestamp;
               setSyncStatus('success');
-              setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+              setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
             }
           });
         }
-      });
-    }
+        if (res.error) setSyncStatus('error');
+      }
 
-    // Auto-pull on window focus (so when returning from mobile to laptop, updates are instant)
-    const handleFocus = () => {
-      if (syncConfig.autoSync && syncConfig.token && syncConfig.gistId) {
-        syncService.pullFromCloud().then((res) => {
-          if (res.success && res.data) {
-            applyImportedData(res.data);
-            setSyncStatus('success');
-            setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
-          }
-        });
+      if (isInitial) {
+        setTimeout(() => {
+          isInitialPullCompleteRef.current = true;
+        }, 1500);
       }
     };
 
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
+    pullRemote(true);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        pullRemote(false);
+      }
+    };
+
+    window.addEventListener('focus', handleVisibility);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    // Periodic background sync every 10 seconds
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        pullRemote(false);
+      }
+    }, 10000);
+
+    return () => {
+      window.removeEventListener('focus', handleVisibility);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      clearInterval(interval);
+    };
   }, [isInitialized]);
 
-  // Debounced auto-save to cloud
+  // Debounced auto-save to cloud on local changes
   useEffect(() => {
-    if (!isInitialized || !syncConfig.autoSync || !syncConfig.token || !syncConfig.gistId) return;
+    // DO NOT save to cloud if initial pull hasn't finished, or if we're currently applying a remote update
+    if (!isInitialized || !isInitialPullCompleteRef.current || isApplyingRemoteRef.current) return;
+    const cfg = syncService.getConfig();
+    if (!cfg.autoSync || !cfg.token || !cfg.gistId) return;
 
     const timer = setTimeout(() => {
+      if (isApplyingRemoteRef.current) return;
       setSyncStatus('syncing');
       syncService.pushToCloud(getBackupDataObject()).then((res) => {
         if (res.success) {
+          if (res.timestamp) {
+            lastKnownCloudTimestampRef.current = res.timestamp;
+          }
           setSyncStatus('success');
-          setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+          setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
         } else {
           setSyncStatus('error');
         }
       });
-    }, 2000);
+    }, 1500);
 
     return () => clearTimeout(timer);
   }, [tasks, goals, leads, templates, habits, reviews, pomodoroSessions, outreachLogs, settings]);

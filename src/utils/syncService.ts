@@ -8,14 +8,16 @@ export interface SyncConfig {
   lastSyncTime?: string;
   lastSyncStatus?: 'idle' | 'syncing' | 'success' | 'error';
   errorMessage?: string;
+  lastRemoteUpdatedAt?: number;
 }
 
 const SYNC_CONFIG_KEY = 'focus_hq_sync_config';
+export const DEFAULT_GIST_ID = '7c3a657df521b2075c1ee845a1a81b6f';
 
 export const DEFAULT_SYNC_CONFIG: SyncConfig = {
   token: '',
-  gistId: '7c3a657df521b2075c1ee845a1a81b6f',
-  autoSync: false,
+  gistId: DEFAULT_GIST_ID,
+  autoSync: true,
 };
 
 export const syncService = {
@@ -23,32 +25,51 @@ export const syncService = {
     try {
       if (typeof window === 'undefined') return DEFAULT_SYNC_CONFIG;
 
-      // First check URL query params for phone pairing (?syncToken=...&gistId=...)
-      const urlParams = new URLSearchParams(window.location.search);
-      const urlToken = urlParams.get('syncToken');
-      const urlGist = urlParams.get('gistId');
+      // Check URL query params for phone pairing (?syncToken=...&gistId=...)
+      let urlToken: string | null = null;
+      let urlGist: string | null = null;
 
-      if (urlToken && urlGist) {
+      const urlParams = new URLSearchParams(window.location.search);
+      urlToken = urlParams.get('syncToken');
+      urlGist = urlParams.get('gistId');
+
+      if (!urlToken && window.location.hash.includes('?')) {
+        const hashQuery = window.location.hash.substring(window.location.hash.indexOf('?') + 1);
+        const hashParams = new URLSearchParams(hashQuery);
+        urlToken = hashParams.get('syncToken');
+        urlGist = hashParams.get('gistId');
+      }
+
+      if (urlToken && urlToken.trim()) {
         const pairedConfig: SyncConfig = {
-          token: urlToken,
-          gistId: urlGist,
+          token: urlToken.trim(),
+          gistId: (urlGist && urlGist.trim()) || DEFAULT_GIST_ID,
           autoSync: true,
         };
         localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(pairedConfig));
 
         // Clean up URL without reloading
-        const cleanUrl = window.location.pathname + window.location.hash;
+        const cleanUrl = window.location.pathname + (window.location.hash.split('?')[0] || '');
         window.history.replaceState({}, document.title, cleanUrl);
         return pairedConfig;
       }
 
-      const stored = localStorage.getItem(SYNC_CONFIG_KEY);
-      if (!stored) {
-        // Preset with the default user's gist config
-        localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(DEFAULT_SYNC_CONFIG));
+      const raw = localStorage.getItem(SYNC_CONFIG_KEY);
+      if (!raw) {
         return DEFAULT_SYNC_CONFIG;
       }
-      return JSON.parse(stored) as SyncConfig;
+
+      const stored = JSON.parse(raw) as Partial<SyncConfig>;
+      const merged: SyncConfig = {
+        token: stored.token ? stored.token.trim() : '',
+        gistId: (stored.gistId && stored.gistId.trim()) ? stored.gistId.trim() : DEFAULT_GIST_ID,
+        autoSync: stored.autoSync !== undefined ? stored.autoSync : true,
+        lastSyncTime: stored.lastSyncTime,
+        lastSyncStatus: stored.lastSyncStatus,
+        lastRemoteUpdatedAt: stored.lastRemoteUpdatedAt,
+      };
+
+      return merged;
     } catch (e) {
       console.warn('[SyncService] Failed to read config:', e);
       return DEFAULT_SYNC_CONFIG;
@@ -67,30 +88,37 @@ export const syncService = {
 
   getMobilePairingUrl(config?: SyncConfig): string {
     const cfg = config || this.getConfig();
-    if (!cfg.token || !cfg.gistId) return '';
+    if (!cfg.token) return '';
     const base = 'https://webcraftstudiosite01-rgb.github.io/focus-hq/';
-    return `${base}?syncToken=${encodeURIComponent(cfg.token)}&gistId=${encodeURIComponent(cfg.gistId)}`;
+    return `${base}?syncToken=${encodeURIComponent(cfg.token)}&gistId=${encodeURIComponent(cfg.gistId || DEFAULT_GIST_ID)}`;
   },
 
-  async pushToCloud(data: AppDataBackup): Promise<{ success: boolean; error?: string }> {
+  async pushToCloud(data: AppDataBackup): Promise<{ success: boolean; error?: string; timestamp?: number }> {
     const cfg = this.getConfig();
     if (!cfg.token || !cfg.gistId) {
-      return { success: false, error: 'Токен или Gist ID не настроены' };
+      return { success: false, error: 'Токен GitHub не настроен' };
     }
 
     try {
+      const nowEpoch = Date.now();
+      const payload: AppDataBackup = {
+        ...data,
+        updatedAtTimestamp: nowEpoch,
+        exportedAt: new Date(nowEpoch).toISOString(),
+      };
+
       const response = await fetch(`https://api.github.com/gists/${cfg.gistId}`, {
         method: 'PATCH',
         headers: {
-          'Authorization': `token ${cfg.token}`,
+          'Authorization': `Bearer ${cfg.token}`,
           'Accept': 'application/vnd.github+json',
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          description: `Focus HQ Backup (${new Date().toLocaleString('ru-RU')})`,
+          description: `Focus HQ Sync (${new Date(nowEpoch).toLocaleString('ru-RU')})`,
           files: {
             'focus_hq_data.json': {
-              content: JSON.stringify(data, null, 2),
+              content: JSON.stringify(payload, null, 2),
             },
           },
         }),
@@ -101,11 +129,12 @@ export const syncService = {
         throw new Error(errJson.message || `Ошибка сервера GitHub: ${response.status}`);
       }
 
-      cfg.lastSyncTime = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      cfg.lastSyncTime = new Date(nowEpoch).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       cfg.lastSyncStatus = 'success';
+      cfg.lastRemoteUpdatedAt = nowEpoch;
       this.saveConfig(cfg);
 
-      return { success: true };
+      return { success: true, timestamp: nowEpoch };
     } catch (err: unknown) {
       console.error('[SyncService] Push failed:', err);
       cfg.lastSyncStatus = 'error';
@@ -118,13 +147,13 @@ export const syncService = {
   async pullFromCloud(): Promise<{ success: boolean; data?: AppDataBackup; error?: string }> {
     const cfg = this.getConfig();
     if (!cfg.token || !cfg.gistId) {
-      return { success: false, error: 'Токен или Gist ID не настроены' };
+      return { success: false, error: 'Токен GitHub не настроен' };
     }
 
     try {
-      const response = await fetch(`https://api.github.com/gists/${cfg.gistId}`, {
+      const response = await fetch(`https://api.github.com/gists/${cfg.gistId}?_t=${Date.now()}`, {
         headers: {
-          'Authorization': `token ${cfg.token}`,
+          'Authorization': `Bearer ${cfg.token}`,
           'Accept': 'application/vnd.github+json',
         },
         cache: 'no-store',
@@ -141,8 +170,12 @@ export const syncService = {
       }
 
       const parsed = JSON.parse(file.content) as AppDataBackup;
-      cfg.lastSyncTime = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      const remoteTs = parsed.updatedAtTimestamp || (parsed.exportedAt ? new Date(parsed.exportedAt).getTime() : Date.now());
+      parsed.updatedAtTimestamp = remoteTs;
+
+      cfg.lastSyncTime = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       cfg.lastSyncStatus = 'success';
+      cfg.lastRemoteUpdatedAt = remoteTs;
       this.saveConfig(cfg);
 
       return { success: true, data: parsed };
