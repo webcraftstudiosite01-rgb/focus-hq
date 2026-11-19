@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="focusGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="50%" stop-color="#4f46e5" />
+      <stop offset="100%" stop-color="#10b981" />
+    </linearGradient>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#06b6d4" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="128" fill="#0f172a" />
+  <!-- Outer Focus Ring -->
+  <circle cx="256" cy="256" r="170" stroke="url(#focusGrad)" stroke-width="24" stroke-dasharray="160 40" stroke-linecap="round" />
+  <!-- Inner Ring -->
+  <circle cx="256" cy="256" r="105" stroke="url(#glowGrad)" stroke-width="20" stroke-dasharray="90 30" stroke-linecap="round" />
+  <!-- Center Target Core -->
+  <circle cx="256" cy="256" r="48" fill="url(#focusGrad)" />
+  <circle cx="256" cy="256" r="22" fill="#ffffff" />
+</svg>
